@@ -1,0 +1,12 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Allows rendering a PrintDocument through core-rs (all render_* commands plus validate_document). This plugin has no delivery transport of its own -- see crates/sdk-tauri/src/lib.rs -- so granting this permission only lets a window ask for bytes/HTML/text back, never talk to a printer directly."
+permissions = [
+    "allow-render-to-escpos",
+    "allow-render-to-html",
+    "allow-render-to-svg",
+    "allow-render-to-plain-text",
+    "allow-render-to-pdf",
+    "allow-validate-document",
+]

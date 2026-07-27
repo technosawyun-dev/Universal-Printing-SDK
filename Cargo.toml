@@ -5,6 +5,7 @@ members = [
     "crates/core-ffi",
     "crates/print-agent",
     "crates/sdk-tauri",
+    "apps/tauri-test/src-tauri",
 ]
 
 [workspace.package]

@@ -1,5 +1,6 @@
 [package]
 name = "printers-sdk-tauri"
+links = "printers-sdk-tauri"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +9,9 @@ description = "Example Tauri v2 plugin wrapping core-rs -- Tauri apps embed core
 [lib]
 name = "printers_sdk_tauri"
 path = "src/lib.rs"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
 
 [dependencies]
 printers-core = { path = "../core-rs" }

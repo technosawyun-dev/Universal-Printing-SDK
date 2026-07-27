@@ -29,6 +29,11 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # Runtime Bluetooth/location permission requests on Android 12+ -- BLE
+  # scanning silently returns nothing if these aren't granted, even with the
+  # manifest entries present. Test-app-only dependency, not part of the SDK.
+  permission_handler: ^11.3.1
+
 dev_dependencies:
   integration_test:
     sdk: flutter

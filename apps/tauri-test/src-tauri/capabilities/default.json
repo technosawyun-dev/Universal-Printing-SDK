@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities for the main window of the standalone Tauri test app.",
+  "windows": ["main"],
+  "permissions": ["core:default", "printers-sdk-tauri:default"]
+}

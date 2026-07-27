@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-validate-document"
+description = "Enables the validate_document command without any pre-configured scope."
+commands.allow = ["validate_document"]
+
+[[permission]]
+identifier = "deny-validate-document"
+description = "Denies the validate_document command without any pre-configured scope."
+commands.deny = ["validate_document"]

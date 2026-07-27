@@ -1,27 +1,21 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
+// Smoke test for the hardware test app: it should build without error and
+// show its three transport panels.
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sdk_flutter_example/main.dart';
 
 void main() {
-  testWidgets('Verify Platform version', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('Test app renders its three transport panels', (WidgetTester tester) async {
+    await tester.pumpWidget(const TestApp());
 
-    // Verify that platform version is retrieved.
-    expect(
-      find.byWidgetPredicate(
-        (Widget widget) =>
-            widget is Text && widget.data!.startsWith('Running on:'),
-      ),
-      findsOneWidget,
-    );
+    expect(find.textContaining('USB (Android USB Host API)'), findsOneWidget);
+    expect(find.textContaining('Bluetooth (BLE only)'), findsOneWidget);
+    expect(find.textContaining('WiFi/TCP printer'), findsOneWidget);
+  });
+
+  test('buildSampleReceipt produces a non-empty ESC/POS byte sequence', () {
+    final bytes = buildSampleReceipt();
+    expect(bytes, isNotEmpty);
+    expect(bytes[0], 0x1B); // ESC
   });
 }

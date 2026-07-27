@@ -9,11 +9,11 @@
 //! at time of writing. macOS/Windows return `NotImplemented` rather than a
 //! silently-wrong implementation.
 //!
-//! Unverified in this environment: no Bluetooth adapter/paired printer is
-//! available in this sandbox, and there's no bluetoothd running here either
-//! -- this is written against `bluer`'s documented rfcomm example but has not
-//! been exercised against real hardware. Most SPP thermal printers listen on
-//! RFCOMM channel 1, hence the default below.
+//! Verified against real hardware 2026-07-27: a paired Y58 80mm thermal
+//! printer over classic Bluetooth SPP, driven through the full HTTP agent
+//! (POST /print-bluetooth -> this module), produced correct printed output.
+//! Most SPP thermal printers listen on RFCOMM channel 1, hence the default
+//! below (confirmed correct against that same printer).
 
 use crate::error::AgentError;
 

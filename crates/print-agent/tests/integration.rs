@@ -159,3 +159,42 @@ async fn pair_revoke_invalidates_the_token() {
     let after_revoke = app.oneshot(req("GET", "/printers", Some(ORIGIN), Some(&token), None)).await.unwrap();
     assert_eq!(after_revoke.status(), StatusCode::UNAUTHORIZED);
 }
+
+/// A browser page always sends a CORS preflight OPTIONS request before a
+/// cross-origin POST with a JSON body -- without a CORS layer, this request
+/// gets no Access-Control-Allow-Origin header back and the browser blocks
+/// the real request client-side (surfaces to JS as an opaque "Failed to
+/// fetch", never even reaching this server's own auth/origin checks).
+#[tokio::test]
+async fn preflight_for_an_allowed_origin_gets_cors_headers_without_a_token() {
+    let app = build_app(test_state());
+
+    let preflight = Request::builder()
+        .method("OPTIONS")
+        .uri("/pair")
+        .header("Origin", ORIGIN)
+        .header("Access-Control-Request-Method", "POST")
+        .header("Access-Control-Request-Headers", "content-type,authorization")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(preflight).await.unwrap();
+    assert!(resp.status().is_success());
+    assert_eq!(resp.headers().get("access-control-allow-origin").unwrap(), ORIGIN);
+}
+
+#[tokio::test]
+async fn preflight_for_a_disallowed_origin_gets_no_cors_headers() {
+    let app = build_app(test_state());
+
+    let preflight = Request::builder()
+        .method("OPTIONS")
+        .uri("/pair")
+        .header("Origin", "http://evil.example")
+        .header("Access-Control-Request-Method", "POST")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(preflight).await.unwrap();
+    assert!(resp.headers().get("access-control-allow-origin").is_none());
+}

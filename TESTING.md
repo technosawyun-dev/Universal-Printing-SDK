@@ -5,6 +5,28 @@ printers**, plus how to re-run the automated test suites if you make
 changes. Written so it works after moving to a different computer (e.g.
 Ubuntu → Windows) with nothing pre-installed.
 
+**Already proven on real hardware (2026-07-27, on the Ubuntu machine, an
+80mm USB+Bluetooth thermal printer, model "Y58_08DA"):**
+- The Desktop agent panel — pairing, listing, and printing — fully works
+  end-to-end through a real browser, clicked by hand, printing real receipts
+  (this uncovered and fixed a real bug: the agent had no CORS support at
+  all, so browser pairing could never have worked before this fix).
+- The same agent's Bluetooth (classic SPP) transport, driven directly via
+  its HTTP API.
+- The Tauri desktop app's render step (webview → Rust plugin → bytes).
+
+**Also learned, specific to this printer model:** its USB connects fine via
+WebUSB but can never print through it on Linux (the `usblp` kernel driver
+already owns the device — the same reason the CUPS queue was needed at
+all), and its Bluetooth is classic SPP, which Web Bluetooth (BLE-only) can
+never reach, on any browser. Neither is a bug — for a printer like this,
+**the Desktop agent panel is the one to actually use**, not the direct
+USB/Bluetooth browser panels. Your printer may differ (a real BLE printer
+would work fine over Web Bluetooth, for instance).
+
+What's *not* proven yet: everything Windows-specific (this was all done on
+Linux) and everything Android — that's what's left for you to do.
+
 ## Quick summary of what to use for what
 
 | Your printer connects via... | What to test with |
@@ -12,6 +34,8 @@ Ubuntu → Windows) with nothing pre-installed.
 | WiFi / network (has its own IP address) | The desktop agent (`dist/printers-agent.exe` on Windows) + the hardware test page's "Desktop agent" panel, using the WiFi box |
 | USB cable | Either the hardware test page's "USB printer" panel (Chrome/Edge), or the desktop agent if the printer is already installed as a normal Windows printer |
 | Bluetooth | The hardware test page's "Bluetooth printer" panel (Chrome/Edge, BLE printers only), **or** the desktop agent if your printer uses classic Bluetooth (only works on Linux right now — see Known Gaps below) |
+| Android phone/tablet | `dist/printers-flutter-test.apk` — see Part 1d |
+| A Tauri/desktop-app-style integration test | `apps/tauri-test/` — see Part 1e |
 | No real printer yet | Open `apps/demo/dist/index.html` (browser preview) or just read `apps/hardware-test/index.html`'s log output |
 
 ---
@@ -96,6 +120,69 @@ Whatever happens (success or failure), the **Log box at the bottom of the
 page tells you exactly what occurred** — copy that text back if you need
 help debugging something.
 
+### 1d. Android app (`dist/printers-flutter-test.apk`)
+
+A ready-to-install debug APK is already built for you — no Android Studio
+or Flutter install needed just to try it.
+
+1. Copy `dist/printers-flutter-test.apk` to your Android phone (USB cable,
+   or upload it somewhere and download it on the phone).
+2. Open the file on the phone. Android will warn about installing from an
+   unknown source the first time — allow it (this is normal for a debug
+   build not from the Play Store).
+3. Open the app. It has three panels: **USB**, **Bluetooth**, **WiFi/TCP**.
+   - USB: tap "List USB devices" (you may need a USB-OTG cable/adapter to
+     plug the printer into an Android phone), then "Print test" next to it.
+   - Bluetooth: tap "Scan 5s". **Important:** this only finds BLE
+     (Bluetooth Low Energy) printers. Many cheap "Y-series" thermal
+     printers use classic Bluetooth (SPP) instead, and simply will not
+     appear in this list — that's a real current limitation of the
+     Android/Flutter side, not a bug you're triggering. If your printer
+     doesn't show up here, use the WiFi/TCP panel instead if your printer
+     also supports network printing, or fall back to testing that printer
+     via the Windows desktop agent instead.
+   - WiFi/TCP: type your printer's IP address and port (default 9100),
+     tap "Send test receipt".
+4. Grant Bluetooth/location permissions if Android prompts for them when
+   you tap "Scan" — without them the scan will silently find nothing.
+
+**To rebuild this APK yourself later** (e.g. after a code change), you need
+Flutter and Android Studio's SDK installed, then from
+`packages/sdk_flutter/example`:
+```
+flutter build apk --debug
+```
+If this fails with `rustc` crashing (`SIGSEGV`) while compiling `printpdf`,
+that's a real cross-compiler stack-overflow issue this session hit too —
+fix it by setting this once per terminal session before building:
+```
+export RUST_MIN_STACK=67108864
+```
+The APK appears at
+`packages/sdk_flutter/example/build/app/outputs/flutter-apk/app-debug.apk`.
+
+### 1e. Tauri desktop test app (`apps/tauri-test/`)
+
+This is a small standalone desktop app (not Global Link's real code) that
+proves out the alternate integration style: the rendering code runs
+embedded directly inside the app's own program, with no separate
+`printers-agent.exe` process alongside it — the pattern a real desktop app
+like Global Link would actually use.
+
+This one was only run and proven on Linux so far — you'll need to build it
+fresh on the Windows laptop (Tauri apps can't be cross-compiled to Windows
+from Linux, unlike the plain agent .exe). Once Rust is installed on
+Windows:
+```
+cd apps/tauri-test/src-tauri
+cargo build --release
+```
+Run the resulting `.exe` (in `target\release\`). It has the same "1. render,
+then 2. choose a delivery method" flow as the browser hardware-test page:
+click "Render to ESC/POS" first, then either "Send via TCP" (for a
+network printer) or "Send via Windows spooler" (type the exact name of a
+printer already installed in Windows).
+
 ---
 
 ## Part 2 — Re-running the automated test suites
@@ -151,10 +238,15 @@ only cross-compiled from Linux, never run.
 
 - **Classic Bluetooth printers via the desktop agent** only work on Linux
   right now (returns a clear error on Windows/macOS instead of failing
-  silently).
+  silently). This same limitation is why some printers won't show up in the
+  Android app's Bluetooth scan either (see 1d) — the Android side only
+  supports BLE, not classic SPP, at all right now.
 - **Silent (no-dialog) printing to a normal A4/Letter printer on Windows**
   was just implemented this session and has never been tested against a
   real Windows printer driver — if you try it and something looks wrong
   (mis-positioned text, wrong size, etc.), that's the most likely place to
   report a bug.
 - **iOS** has no build at all yet (needs a Mac).
+- **The Tauri desktop test app** (1e) has only been run on Linux — the
+  actual Windows .exe has never been built or executed yet; that's part of
+  what you're testing by building it fresh on the Windows laptop.

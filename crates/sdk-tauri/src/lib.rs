@@ -2,8 +2,10 @@
 //! a Tauri app embeds `core-rs` directly in its own Rust binary -- no
 //! separate agent process, no HTTP round trip (see docs/ARCHITECTURE.md).
 //! A real app registers this with `.plugin(printers_sdk_tauri::init())` in
-//! its `tauri::Builder`, then calls these as regular Tauri commands from
-//! the webview via `invoke("plugin:printers-sdk|render_to_escpos", ...)`.
+//! its `tauri::Builder`, grants the `printers-sdk-tauri:default` permission
+//! to its window in `capabilities/`, then calls these as regular Tauri
+//! commands from the webview via
+//! `invoke("plugin:printers-sdk-tauri|render_to_escpos", ...)`.
 //!
 //! This crate only wraps rendering (bytes/HTML/text out); it deliberately
 //! does not open a delivery transport itself -- an app author chooses how to
@@ -50,7 +52,12 @@ fn validate_document(document_json: String) -> Result<(), String> {
 }
 
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
-    Builder::new("printers-sdk")
+    // Must match `CARGO_PKG_NAME` exactly -- build.rs derives this plugin's
+    // ACL permission identifier from the crate name, and Tauri's runtime
+    // permission check matches capability grants against this registered
+    // name. A mismatch here silently denies every command at runtime even
+    // though the app compiles fine.
+    Builder::new("printers-sdk-tauri")
         .invoke_handler(tauri::generate_handler![
             render_to_escpos,
             render_to_html,

@@ -1,0 +1,21 @@
+[package]
+name = "printers-tauri-test"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Standalone Tauri v2 desktop app for testing the SDK's Tauri integration path (embed core-rs + a delivery transport directly, no separate agent process) -- the pattern a real app like Global Link would use. Not a production app, not published."
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+printers-sdk-tauri = { path = "../../../crates/sdk-tauri" }
+printers-print-agent = { path = "../../../crates/print-agent", default-features = false }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "printers-tauri-test"
+path = "src/main.rs"
