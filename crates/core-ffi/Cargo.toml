@@ -1,0 +1,19 @@
+[package]
+name = "printers-core-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "uniffi bindings over printers-core, compiled into a native library embedded in mobile apps (no loopback agent on mobile — see docs/ARCHITECTURE.md)."
+
+[lib]
+# cdylib: Android (.so via NDK) and a dev-time dynamic lib.
+# staticlib: iOS (linked into an XCFramework on a Mac with Xcode — cannot be built in this environment).
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+printers-core = { path = "../core-rs" }
+uniffi = "0.28"
+thiserror = "1"
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }

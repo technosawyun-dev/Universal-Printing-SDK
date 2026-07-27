@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Printers SDK — Hardware Test Page</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, Segoe UI, Arial, sans-serif;
+      background: #0b0c10;
+      color: #e6e6e6;
+      padding: 1.5rem;
+    }
+    h1 { font-size: 1.3rem; margin: 0 0 0.25rem; }
+    .subtitle { color: #9aa; margin-bottom: 1.5rem; font-size: 0.9rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .card {
+      background: #14161c;
+      border: 1px solid #2a2d38;
+      border-radius: 10px;
+      padding: 1rem;
+    }
+    .card h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+    .card p.desc { color: #9aa; font-size: 0.85rem; margin: 0 0 0.75rem; }
+    button {
+      background: #6366f1;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 0.5rem 0.9rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+      margin: 0.15rem 0.3rem 0.15rem 0;
+    }
+    button:disabled { background: #33364a; cursor: not-allowed; }
+    button.secondary { background: #2a2d38; }
+    input, select {
+      background: #0b0c10;
+      border: 1px solid #2a2d38;
+      color: #e6e6e6;
+      border-radius: 6px;
+      padding: 0.4rem 0.6rem;
+      font-size: 0.85rem;
+      margin: 0.2rem 0.3rem 0.2rem 0;
+    }
+    .status { font-size: 0.8rem; margin-top: 0.5rem; min-height: 1.2em; }
+    .status.ok { color: #4ade80; }
+    .status.err { color: #f87171; }
+    .status.pending { color: #fbbf24; }
+    textarea {
+      width: 100%;
+      height: 220px;
+      background: #0b0c10;
+      color: #e6e6e6;
+      border: 1px solid #2a2d38;
+      border-radius: 8px;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+      padding: 0.75rem;
+    }
+    #log {
+      background: #0b0c10;
+      border: 1px solid #2a2d38;
+      border-radius: 8px;
+      padding: 0.75rem;
+      height: 180px;
+      overflow: auto;
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+    }
+    .log-line.err { color: #f87171; }
+    .log-line.ok { color: #4ade80; }
+  </style>
+</head>
+<body>
+  <h1>Printers SDK — Hardware Test Page</h1>
+  <p class="subtitle">
+    Self-contained, no server needed — just double-click this file to open it in Chrome or Edge.
+    Edit the receipt JSON below, then try printing via whichever connection your printer uses.
+  </p>
+
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <h2>1. The test receipt</h2>
+    <p class="desc">This is what will be printed. Edit it if you like — it must stay valid JSON.</p>
+    <textarea id="doc-json" spellcheck="false"></textarea>
+    <div id="doc-status" class="status"></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>USB printer (WebUSB)</h2>
+      <p class="desc">Chrome/Edge only. Printer must be plugged in via USB cable.</p>
+      <button id="usb-connect">1. Connect USB printer</button>
+      <button id="usb-print" disabled>2. Print test receipt</button>
+      <div id="usb-status" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>Bluetooth printer (Web Bluetooth)</h2>
+      <p class="desc">Chrome/Edge only. BLE printers only (not all Bluetooth printers support this — classic Bluetooth needs the desktop agent below instead).</p>
+      <button id="bt-connect">1. Connect Bluetooth printer</button>
+      <button id="bt-print" disabled>2. Print test receipt</button>
+      <div id="bt-status" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>Desktop agent (WiFi, USB, classic Bluetooth)</h2>
+      <p class="desc">Requires <code>printers-agent</code> running on this computer (see TESTING.md). Covers WiFi/network printers, Windows-installed USB printers, and classic Bluetooth.</p>
+      <div>
+        <button id="agent-pair">1. Pair with agent</button>
+        <button id="agent-list" disabled>2. List printers</button>
+      </div>
+      <div style="margin-top: 0.5rem;">
+        <select id="agent-printer-list" disabled><option>(no printers listed yet)</option></select>
+        <button id="agent-print" disabled>3. Print to selected</button>
+      </div>
+      <div style="margin-top: 0.75rem; border-top: 1px solid #2a2d38; padding-top: 0.5rem;">
+        <p class="desc" style="margin-bottom:0.3rem;">Or print directly to a known WiFi printer IP:</p>
+        <input id="agent-tcp-host" placeholder="192.168.1.50" size="14" />
+        <input id="agent-tcp-port" placeholder="9100" size="6" value="9100" />
+        <button id="agent-tcp-print">Print via WiFi</button>
+      </div>
+      <div id="agent-status" class="status"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Log</h2>
+    <div id="log"></div>
+  </div>
+
+  <script src="bundle.js"></script>
+  <script>
+    const { toEscPos, validateDocument, AgentClient, requestWebUsbPrinter, printViaWebUsb, requestWebBluetoothPrinter, printViaWebBluetooth } = window.PrintersSDK;
+
+    const SAMPLE_DOC = {
+      version: "1.0",
+      paper: { kind: "thermal-80" },
+      meta: { title: "Hardware test receipt" },
+      content: [
+        { type: "text", value: "PRINTERS SDK TEST", align: "center", bold: true, size: { w: 2, h: 2 } },
+        { type: "rule" },
+        { type: "text", value: "If you can read this, the connection works!" },
+        { type: "feed", lines: 1 },
+        { type: "qrcode", data: "https://example.com/hardware-test", size: 5 },
+        { type: "feed", lines: 1 },
+        { type: "cut" },
+      ],
+    };
+
+    const docJsonEl = document.getElementById("doc-json");
+    const docStatusEl = document.getElementById("doc-status");
+    docJsonEl.value = JSON.stringify(SAMPLE_DOC, null, 2);
+
+    function log(message, kind) {
+      const line = document.createElement("div");
+      line.className = "log-line" + (kind ? " " + kind : "");
+      const time = new Date().toLocaleTimeString();
+      line.textContent = "[" + time + "] " + message;
+      const logEl = document.getElementById("log");
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setStatus(el, message, kind) {
+      el.textContent = message;
+      el.className = "status" + (kind ? " " + kind : "");
+    }
+
+    function getDocument() {
+      let parsed;
+      try {
+        parsed = JSON.parse(docJsonEl.value);
+      } catch (e) {
+        setStatus(docStatusEl, "Invalid JSON: " + e.message, "err");
+        throw e;
+      }
+      try {
+        const doc = validateDocument(parsed);
+        setStatus(docStatusEl, "Valid PrintDocument.", "ok");
+        return doc;
+      } catch (e) {
+        setStatus(docStatusEl, "Invalid document: " + e.message, "err");
+        throw e;
+      }
+    }
+
+    // --- USB ---
+    let usbDevice = null;
+    document.getElementById("usb-connect").addEventListener("click", async () => {
+      const statusEl = document.getElementById("usb-status");
+      try {
+        setStatus(statusEl, "Opening device picker...", "pending");
+        usbDevice = await requestWebUsbPrinter();
+        setStatus(statusEl, "Connected: " + (usbDevice.productName || usbDevice.serialNumber || "USB device"), "ok");
+        log("USB device selected: " + JSON.stringify({ vendorId: usbDevice.vendorId, productId: usbDevice.productId }), "ok");
+        document.getElementById("usb-print").disabled = false;
+      } catch (e) {
+        setStatus(statusEl, "Failed: " + e.message, "err");
+        log("USB connect failed: " + e.message, "err");
+      }
+    });
+    document.getElementById("usb-print").addEventListener("click", async () => {
+      const statusEl = document.getElementById("usb-status");
+      try {
+        const doc = getDocument();
+        setStatus(statusEl, "Sending to printer...", "pending");
+        await printViaWebUsb(usbDevice, doc);
+        setStatus(statusEl, "Sent! Check the printer.", "ok");
+        log("USB print succeeded.", "ok");
+      } catch (e) {
+        setStatus(statusEl, "Failed: " + e.message, "err");
+        log("USB print failed: " + e.message, "err");
+      }
+    });
+
+    // --- Bluetooth ---
+    let btDevice = null;
+    document.getElementById("bt-connect").addEventListener("click", async () => {
+      const statusEl = document.getElementById("bt-status");
+      try {
+        setStatus(statusEl, "Opening device picker...", "pending");
+        btDevice = await requestWebBluetoothPrinter();
+        setStatus(statusEl, "Connected: " + (btDevice.name || btDevice.id), "ok");
+        log("Bluetooth device selected: " + (btDevice.name || btDevice.id), "ok");
+        document.getElementById("bt-print").disabled = false;
+      } catch (e) {
+        setStatus(statusEl, "Failed: " + e.message, "err");
+        log("Bluetooth connect failed: " + e.message, "err");
+      }
+    });
+    document.getElementById("bt-print").addEventListener("click", async () => {
+      const statusEl = document.getElementById("bt-status");
+      try {
+        const doc = getDocument();
+        setStatus(statusEl, "Sending to printer...", "pending");
+        await printViaWebBluetooth(btDevice, doc);
+        setStatus(statusEl, "Sent! Check the printer.", "ok");
+        log("Bluetooth print succeeded.", "ok");
+      } catch (e) {
+        setStatus(statusEl, "Failed: " + e.message, "err");
+        log("Bluetooth print failed: " + e.message, "err");
+      }
+    });
+
+    // --- Agent ---
+    const agentClient = new AgentClient({ baseUrl: "http://127.0.0.1:18999" });
+    let listedPrinters = [];
+    document.getElementById("agent-pair").addEventListener("click", async () => {
+      const statusEl = document.getElementById("agent-status");
+      try {
+        setStatus(statusEl, "Pairing (approve the prompt if the agent shows one)...", "pending");
+        await agentClient.pair("Hardware Test Page");
+        setStatus(statusEl, "Paired!", "ok");
+        log("Paired with agent.", "ok");
+        document.getElementById("agent-list").disabled = false;
+      } catch (e) {
+        setStatus(statusEl, "Failed: " + e.message + " -- is printers-agent.exe running?", "err");
+        log("Pair failed: " + e.message, "err");
+      }
+    });
+    document.getElementById("agent-list").addEventListener("click", async () => {
+      const statusEl = document.getElementById("agent-status");
+      try {
+        setStatus(statusEl, "Listing printers...", "pending");
+        listedPrinters = await agentClient.listPrinters();
+        const select = document.getElementById("agent-printer-list");
+        select.innerHTML = "";
+        if (listedPrinters.length === 0) {
+          select.innerHTML = "<option>(none found)</option>";
+        } else {
+          for (const p of listedPrinters) {
+            const opt = document.createElement("option");
+            opt.value = p.id;
+            opt.textContent = p.name + " (" + p.transport + ")";
+            select.appendChild(opt);
+          }
+          select.disabled = false;
+          document.getElementById("agent-print").disabled = false;
+        }
+        setStatus(statusEl, "Found " + listedPrinters.length + " printer(s).", "ok");
+        log("Printers: " + JSON.stringify(listedPrinters), "ok");
+      } catch (e) {
+        setStatus(statusEl, "Failed: " + e.message, "err");
+        log("List printers failed: " + e.message, "err");
+      }
+    });
+    document.getElementById("agent-print").addEventListener("click", async () => {
+      const statusEl = document.getElementById("agent-status");
+      try {
+        const doc = getDocument();
+        const printerId = document.getElementById("agent-printer-list").value;
+        setStatus(statusEl, "Printing...", "pending");
+        const job = await agentClient.print(printerId, doc);
+        setStatus(statusEl, "Job queued: " + job.jobId, "ok");
+        log("Print job started: " + JSON.stringify(job), "ok");
+      } catch (e) {
+        setStatus(statusEl, "Failed: " + e.message, "err");
+        log("Print failed: " + e.message, "err");
+      }
+    });
+    document.getElementById("agent-tcp-print").addEventListener("click", async () => {
+      const statusEl = document.getElementById("agent-status");
+      try {
+        const doc = getDocument();
+        const host = document.getElementById("agent-tcp-host").value.trim();
+        const port = Number(document.getElementById("agent-tcp-port").value.trim() || "9100");
+        if (!host) throw new Error("Enter the printer's IP address first.");
+        setStatus(statusEl, "Printing via WiFi...", "pending");
+        const job = await agentClient.printTcp(host, port, doc);
+        setStatus(statusEl, "Job queued: " + job.jobId, "ok");
+        log("WiFi print job started: " + JSON.stringify(job), "ok");
+      } catch (e) {
+        setStatus(statusEl, "Failed: " + e.message, "err");
+        log("WiFi print failed: " + e.message, "err");
+      }
+    });
+
+    log("Page ready. Pairing with the agent requires printers-agent.exe to already be running.");
+  </script>
+</body>
+</html>

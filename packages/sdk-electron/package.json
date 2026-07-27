@@ -1,0 +1,31 @@
+{
+  "name": "@printers/sdk-electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron main-process bridge: spawns crates/print-agent as a sidecar (thermal transports) + native silent print via Chromium's own print pipeline (A4/A3/Letter). See docs/ARCHITECTURE.md.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@printers/core-ts": "workspace:*",
+    "@printers/sdk-web": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "electron": "^33.0.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.4"
+  }
+}

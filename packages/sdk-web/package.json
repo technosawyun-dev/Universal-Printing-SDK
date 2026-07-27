@@ -1,0 +1,32 @@
+{
+  "name": "@printers/sdk-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser client SDK: print-agent HTTP/WS client + direct WebUSB/Web Serial/Web Bluetooth (BLE) transports + window.print fallback. See docs/ARCHITECTURE.md.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@printers/core-ts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/w3c-web-serial": "^1.0.8",
+    "@types/w3c-web-usb": "^1.0.14",
+    "@types/web-bluetooth": "^0.0.21",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.4"
+  }
+}

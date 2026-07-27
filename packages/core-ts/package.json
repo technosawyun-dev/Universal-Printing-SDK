@@ -1,0 +1,32 @@
+{
+  "name": "@printers/core-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PrintDocument model + renderers (ESC/POS, HTML, SVG, plain text) — see docs/DOCUMENT_FORMAT.md",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.23.8",
+    "qrcode": "^1.5.4",
+    "fast-png": "^6.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/qrcode": "^1.5.5",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.4"
+  }
+}

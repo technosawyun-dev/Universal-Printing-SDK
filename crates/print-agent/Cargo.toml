@@ -1,0 +1,48 @@
+[package]
+name = "printers-print-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local HTTP+WS print-agent binary (desktop) -- see docs/PROTOCOL.md."
+
+[lib]
+name = "printers_print_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "printers-agent"
+path = "src/main.rs"
+
+[features]
+# On by default: real deployments (a developer's actual Linux desktop) almost
+# always have libudev, needed for serialport to filter real ports from the
+# ~32 non-present legacy /dev/ttyS* stub devices every Linux kernel creates.
+# Only disable this (--no-default-features) in an environment that lacks
+# libudev-dev/pkg-config -- e.g. this project's own sandbox, which has no
+# passwordless sudo to install it. See transport/serial.rs.
+default = ["udev"]
+udev = ["serialport/libudev"]
+
+[dependencies]
+printers-core = { path = "../core-rs" }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "process", "io-util", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.10"
+dirs = "6"
+serialport = { version = "4", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { version = "0.17", default-features = false, features = ["rfcomm", "bluetoothd", "tokio-stream"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Graphics_Printing", "Win32_Graphics_Gdi", "Win32_Foundation", "Win32_System_SystemServices", "Win32_Storage_Xps"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

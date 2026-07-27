@@ -1,0 +1,16 @@
+{
+  "name": "printers-printing",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Universal cross-platform printing SDK: one document model, ESC/POS + HTML/SVG/PDF rendering, local print-agent, browser/desktop/mobile SDKs.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present run build",
+    "test": "pnpm -r --if-present run test",
+    "lint": "pnpm -r --if-present run lint",
+    "typecheck": "pnpm -r --if-present run typecheck"
+  },
+  "packageManager": "pnpm@10.34.5"
+}

@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core-rs",
+    "crates/core-ffi",
+    "crates/print-agent",
+    "crates/sdk-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "local"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
