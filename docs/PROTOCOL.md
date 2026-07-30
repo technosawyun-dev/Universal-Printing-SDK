@@ -38,7 +38,7 @@ Returns everything the agent can currently see, across all transports.
 {
   "printers": [
     { "id": "windows:EPSON TM-T88V", "name": "EPSON TM-T88V", "kind": "thermal-80",
-      "transport": "windows-queue", "status": "ready" },
+      "transport": "windows", "status": "ready" },
     { "id": "tcp:192.168.1.50:9100", "name": "Kitchen printer", "kind": "thermal-80",
       "transport": "tcp", "status": "unknown" },
     { "id": "serial:/dev/ttyUSB0", "name": "USB Serial", "kind": "thermal-58",

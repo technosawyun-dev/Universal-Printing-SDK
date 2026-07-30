@@ -5,6 +5,7 @@
 
 use crate::render::barcode::generate_barcode_bits;
 use crate::render::qr::qr_modules;
+use crate::render::text_shaping::{needs_shaping, shape_text_to_bitmap};
 use crate::types::{resolve_margin_mm, resolve_page_height_mm, resolve_page_width_mm, Align, PrintDocument, PrintNode, QrEcLevel};
 use crate::CoreError;
 use printpdf::*;
@@ -39,6 +40,52 @@ fn show_text(ops: &mut Vec<Op>, text: &str, x_pt: f32, y_pt: f32, size_pt: f32, 
     ops.push(Op::SetFillColor { col: BLACK });
     ops.push(Op::ShowText { items: vec![TextItem::Text(text.to_string())] });
     ops.push(Op::EndTextSection);
+}
+
+/// Embeds shaped text as a raster image -- the same technique `image` nodes
+/// already use -- for text the builtin PDF fonts can't represent (see
+/// render/text_shaping.rs). `container_x_pt`/`container_width_pt` place and
+/// align it exactly like `show_text` + `text_x` do, but using the shaped
+/// bitmap's *real* width rather than `approx_text_width_pt`'s estimate.
+/// `y_bottom_pt`/`size_pt` set the image's bottom edge and on-page height.
+/// Returns `None` if there was nothing to shape (e.g. whitespace-only).
+#[allow(clippy::too_many_arguments)]
+fn show_shaped_text(pdf_doc: &mut PdfDocument, ops: &mut Vec<Op>, text: &str, align: Option<Align>, bold: bool, container_x_pt: f32, container_width_pt: f32, y_bottom_pt: f32, size_pt: f32) -> Option<()> {
+    // Rasterize well above the final point size for crisp print output --
+    // the final on-page size is fixed independently below via `dpi`, so this
+    // only controls source-bitmap resolution, not visual size.
+    const OVERSAMPLE: f32 = 5.0;
+    let bitmap = shape_text_to_bitmap(text, size_pt * OVERSAMPLE, bold)?;
+
+    // Encode as a grayscale+alpha PNG (black ink, coverage as alpha) and feed
+    // it through the exact same embedding path `image` nodes already use.
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, bitmap.width, bitmap.height);
+        encoder.set_color(png::ColorType::GrayscaleAlpha);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().ok()?;
+        let mut pixels = Vec::with_capacity((bitmap.width * bitmap.height * 2) as usize);
+        for &coverage in &bitmap.coverage {
+            pixels.push(0u8);
+            pixels.push(coverage);
+        }
+        writer.write_image_data(&pixels).ok()?;
+    }
+
+    let mut warnings = Vec::new();
+    let image = RawImage::decode_from_bytes(&png_bytes, &mut warnings).ok()?;
+    let image_id = pdf_doc.add_image(&image);
+
+    let height_pt = size_pt;
+    let width_pt = height_pt * (image.width as f32 / image.height as f32);
+    let dpi = image.width as f32 * 72.0 / width_pt;
+    let x = container_x_pt + text_x(align, container_width_pt, width_pt);
+    ops.push(Op::UseXobject {
+        id: image_id,
+        transform: XObjectTransform { translate_x: Some(Pt(x)), translate_y: Some(Pt(y_bottom_pt)), dpi: Some(dpi), ..Default::default() },
+    });
+    Some(())
 }
 
 fn filled_rect(ops: &mut Vec<Op>, x0: f32, y0: f32, x1: f32, y1: f32) {
@@ -96,8 +143,12 @@ pub fn to_pdf(doc: &PrintDocument) -> Result<Vec<u8>, CoreError> {
         match node {
             PrintNode::Text(n) => {
                 let size = FONT_SIZE_PT * n.size.map(|s| s.h as f32).unwrap_or(1.0);
-                let x = text_x(n.align, content_width_pt, approx_text_width_pt(&n.value, size));
-                show_text(&mut ops, &n.value, margin_pt + x, cursor_pt - size, size, n.bold.unwrap_or(false));
+                if needs_shaping(&n.value) {
+                    show_shaped_text(&mut pdf_doc, &mut ops, &n.value, n.align, n.bold.unwrap_or(false), margin_pt, content_width_pt, cursor_pt - size, size);
+                } else {
+                    let x = text_x(n.align, content_width_pt, approx_text_width_pt(&n.value, size));
+                    show_text(&mut ops, &n.value, margin_pt + x, cursor_pt - size, size, n.bold.unwrap_or(false));
+                }
                 cursor_pt -= size * 1.4;
             }
             PrintNode::Row(n) => {
@@ -106,9 +157,13 @@ pub fn to_pdf(doc: &PrintDocument) -> Result<Vec<u8>, CoreError> {
                 let bold = n.bold.unwrap_or(false);
                 for col in &n.columns {
                     let w = (col.width as f32 / total_units) * content_width_pt;
-                    let text_w = approx_text_width_pt(&col.text, FONT_SIZE_PT);
-                    let x = x_cursor + text_x(col.align, w, text_w);
-                    show_text(&mut ops, &col.text, margin_pt + x, cursor_pt - FONT_SIZE_PT, FONT_SIZE_PT, bold);
+                    if needs_shaping(&col.text) {
+                        show_shaped_text(&mut pdf_doc, &mut ops, &col.text, col.align, bold, margin_pt + x_cursor, w, cursor_pt - FONT_SIZE_PT, FONT_SIZE_PT);
+                    } else {
+                        let text_w = approx_text_width_pt(&col.text, FONT_SIZE_PT);
+                        let x = x_cursor + text_x(col.align, w, text_w);
+                        show_text(&mut ops, &col.text, margin_pt + x, cursor_pt - FONT_SIZE_PT, FONT_SIZE_PT, bold);
+                    }
                     x_cursor += w;
                 }
                 cursor_pt -= FONT_SIZE_PT * 1.4;

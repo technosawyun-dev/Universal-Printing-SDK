@@ -7,3 +7,4 @@ pub mod pdf;
 pub mod qr;
 pub mod svg;
 pub mod text;
+pub mod text_shaping;

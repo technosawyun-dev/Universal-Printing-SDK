@@ -24,8 +24,56 @@ never reach, on any browser. Neither is a bug — for a printer like this,
 USB/Bluetooth browser panels. Your printer may differ (a real BLE printer
 would work fine over Web Bluetooth, for instance).
 
-What's *not* proven yet: everything Windows-specific (this was all done on
-Linux) and everything Android — that's what's left for you to do.
+**Also proven on real hardware (2026-07-30, on the Windows laptop, the same
+Y58_08DA 80mm USB+Bluetooth thermal printer, plus the Windows-installed
+`POS-58` driver and `Microsoft Print to PDF`):**
+- `pnpm install` / `pnpm build` / `pnpm -r test` (86 tests) and
+  `cargo test --workspace` (98 tests, up from 95 — this session added
+  Bluetooth unit tests) both pass for real on Windows, not just cross-compiled.
+- `printers-agent.exe` builds, runs, and its `/health` endpoint reports
+  `"platform":"windows"`.
+- The Tauri desktop test app (`apps/tauri-test/`) builds and opens a real
+  window on Windows for the first time — it had only ever run on Linux
+  before. (Needed one fix to build at all: `icons/icon.ico` didn't exist,
+  only `icons/icon.png` — generated via .NET `System.Drawing` since
+  `tauri-build`'s Windows resource step requires an `.ico` even with
+  bundling disabled.)
+- RAW ESC/POS to the installed `POS-58` driver, for both thermal-58 and
+  thermal-80 document profiles: byte-inspected (via a printer bound to a
+  local-file port instead of the real USB port) and confirmed correct —
+  starts with the ESC/POS init command, ends with the requested cut command.
+- Silent (no-dialog) GDI printing to A4 and Letter: **found and fixed a real
+  bug** — `print_document_gdi` was passing a null `DEVMODE` to `CreateDCW`,
+  so every job silently used the printer driver's default paper size
+  (Letter) regardless of what the document declared; an A4 receipt printed
+  as Letter with no error. Fixed by fetching the printer's DEVMODE via
+  `DocumentPropertiesW` and setting `dmPaperSize`/`dmPaperWidth`/
+  `dmPaperLength` before `CreateDCW`. Verified with real captured PDFs: A4 is
+  now 595x842pt, Letter 612x792pt (both were 612x792pt before the fix).
+- WiFi/network printing: verified against a local TCP:9100 listener
+  standing in for a network printer — byte-inspected and confirmed correct
+  ESC/POS.
+- **Classic Bluetooth on Windows, previously not implemented at all,
+  built from scratch this session** (`crates/print-agent/src/transport/bluetooth.rs`,
+  a raw `AF_BTH`/`BTHPROTO_RFCOMM` Winsock socket — no extra runtime
+  dependency beyond `ws2_32.dll`, which ships on every Windows install).
+  **Confirmed on real hardware**: printed an actual receipt to the paired
+  Y58_08DA printer over classic Bluetooth SPP from Windows, and visually
+  confirmed the physical printout matched the sent content exactly.
+- `GET /printers` didn't enumerate Windows-installed printers at all (only
+  CUPS/serial/discovered-TCP), so a printer like `POS-58` had no way to
+  appear in the hardware-test page's "Desktop agent" dropdown even though
+  the backend could already print to it directly by name. Fixed by adding
+  `EnumPrintersW`-based listing (same technique already proven in the
+  Sawyun POS project's production print-agent). **Confirmed via the actual
+  browser page**: paired, listed printers (now showing
+  `windows:POS-58(copy of 2)`), selected it, clicked print, and a real
+  receipt came out.
+
+What's *not* proven yet: Android (in progress — Flutter/Android SDK
+installed this session, build pending) and everything macOS/iOS (no Mac was
+available this session; macOS's Bluetooth path is still `NotImplemented`
+the same as before, and iOS still has no build at all).
 
 ## Quick summary of what to use for what
 
@@ -169,9 +217,12 @@ embedded directly inside the app's own program, with no separate
 `printers-agent.exe` process alongside it — the pattern a real desktop app
 like Global Link would actually use.
 
-This one was only run and proven on Linux so far — you'll need to build it
-fresh on the Windows laptop (Tauri apps can't be cross-compiled to Windows
-from Linux, unlike the plain agent .exe). Once Rust is installed on
+Proven on Linux originally, and now also on Windows (2026-07-30): builds
+clean and opens a real window (needed one fix first — `icons/icon.ico` was
+missing, only `icons/icon.png` existed; `tauri-build`'s Windows resource
+step requires an `.ico` even with bundling disabled). If you're setting this
+up fresh on another Windows machine (Tauri apps can't be cross-compiled to
+Windows from Linux, unlike the plain agent .exe), once Rust is installed on
 Windows:
 ```
 cd apps/tauri-test/src-tauri
@@ -236,17 +287,38 @@ only cross-compiled from Linux, never run.
 
 ## Known gaps (things that won't work yet, on purpose, not silently broken)
 
-- **Classic Bluetooth printers via the desktop agent** only work on Linux
-  right now (returns a clear error on Windows/macOS instead of failing
-  silently). This same limitation is why some printers won't show up in the
-  Android app's Bluetooth scan either (see 1d) — the Android side only
-  supports BLE, not classic SPP, at all right now.
-- **Silent (no-dialog) printing to a normal A4/Letter printer on Windows**
-  was just implemented this session and has never been tested against a
-  real Windows printer driver — if you try it and something looks wrong
-  (mis-positioned text, wrong size, etc.), that's the most likely place to
-  report a bug.
+- **Classic Bluetooth printers via the desktop agent** now work on both
+  Linux (BlueZ) and Windows (a raw `AF_BTH`/`BTHPROTO_RFCOMM` Winsock
+  socket, added and hardware-confirmed 2026-07-30) — only macOS still
+  returns a clear `NotImplemented` error instead of failing silently. This
+  same limitation is why some printers won't show up in the Android app's
+  Bluetooth scan either (see 1d) — the Android side only supports BLE, not
+  classic SPP, at all right now.
+- ~~Silent (no-dialog) printing to a normal A4/Letter printer on Windows~~
+  **fixed 2026-07-30**: it was ignoring the document's declared paper size
+  entirely (always printing at the driver's default, typically Letter, even
+  for an A4 document) because `CreateDCW` was never given a `DEVMODE`. Now
+  fetches and sets the correct paper size before creating the device
+  context; verified against real printer output.
 - **iOS** has no build at all yet (needs a Mac).
-- **The Tauri desktop test app** (1e) has only been run on Linux — the
-  actual Windows .exe has never been built or executed yet; that's part of
-  what you're testing by building it fresh on the Windows laptop.
+- ~~The Tauri desktop test app (1e) has only been run on Linux~~ **also
+  confirmed on Windows 2026-07-30**: builds clean (after adding the missing
+  `icons/icon.ico`) and opens a real window.
+- **macOS** hasn't been touched since the original Linux/Windows testing —
+  no session has run any of this on real macOS hardware yet, so the
+  CUPS-based RAW path there (code-identical to Linux's) is unverified in
+  practice, on top of the Bluetooth gap above.
+- **Direct browser printing without the agent** (WebUSB) is blocked by
+  design whenever Windows already has a driver claiming the printer's USB
+  interface (confirmed 2026-07-30 against a real printer) — the OS only
+  allows one driver bound to a USB interface at a time, so a driver-claimed
+  printer needs the Desktop Agent panel (which now lists Windows-installed
+  printers automatically, see below) rather than the direct USB/Bluetooth
+  browser panels. This mirrors the same-shaped Linux limitation noted above
+  for WebUSB/`usblp`.
+- Fixed 2026-07-30: `GET /printers` never listed Windows-installed printers
+  (only CUPS/serial/discovered-TCP), so the hardware-test page's "Desktop
+  agent" dropdown had no way to show a driver-installed printer like
+  `POS-58` even though the backend could already print to it by name. Now
+  enumerates via `EnumPrintersW`; confirmed end-to-end through the actual
+  browser page.

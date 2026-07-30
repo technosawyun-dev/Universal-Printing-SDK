@@ -41,6 +41,54 @@ impl DiscoveredRegistry {
     }
 }
 
+/// Windows-installed printers (POS drivers bound to USB, "Microsoft Print to
+/// PDF", etc.) -- listed so the `windows:<name>` transport (RAW spooler
+/// write / GDI silent print, see transport::windows_queue) has a
+/// corresponding entry in `GET /printers` for callers to discover and select
+/// rather than needing to already know the exact Windows printer name.
+#[cfg(target_os = "windows")]
+fn list_windows_printers() -> Vec<Printer> {
+    use windows_sys::Win32::Graphics::Printing::{EnumPrintersW, PRINTER_ENUM_CONNECTIONS, PRINTER_ENUM_LOCAL, PRINTER_INFO_4W};
+    let flags = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
+
+    unsafe fn wide_to_string(ptr: *const u16) -> String {
+        let mut len = 0isize;
+        while *ptr.offset(len) != 0 {
+            len += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len as usize))
+    }
+
+    unsafe {
+        let mut needed: u32 = 0;
+        let mut returned: u32 = 0;
+        EnumPrintersW(flags, std::ptr::null(), 4, std::ptr::null_mut(), 0, &mut needed, &mut returned);
+        if needed == 0 {
+            return Vec::new();
+        }
+
+        let mut buf = vec![0u8; needed as usize];
+        let ok = EnumPrintersW(flags, std::ptr::null(), 4, buf.as_mut_ptr(), needed, &mut needed, &mut returned);
+        if ok == 0 {
+            return Vec::new();
+        }
+
+        std::slice::from_raw_parts(buf.as_ptr() as *const PRINTER_INFO_4W, returned as usize)
+            .iter()
+            .filter(|info| !info.pPrinterName.is_null())
+            .map(|info| {
+                let name = wide_to_string(info.pPrinterName);
+                Printer { id: format!("windows:{name}"), name, kind: "unknown".to_string(), transport: "windows".to_string(), status: "unknown".to_string() }
+            })
+            .collect()
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn list_windows_printers() -> Vec<Printer> {
+    Vec::new()
+}
+
 pub async fn list_all(discovered: &DiscoveredRegistry) -> Vec<Printer> {
     let mut printers = Vec::new();
 
@@ -64,6 +112,7 @@ pub async fn list_all(discovered: &DiscoveredRegistry) -> Vec<Printer> {
         });
     }
 
+    printers.extend(list_windows_printers());
     printers.extend(discovered.tcp_printers());
     printers
 }

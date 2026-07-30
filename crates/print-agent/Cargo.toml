@@ -40,7 +40,7 @@ serialport = { version = "4", default-features = false }
 bluer = { version = "0.17", default-features = false, features = ["rfcomm", "bluetoothd", "tokio-stream"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Graphics_Printing", "Win32_Graphics_Gdi", "Win32_Foundation", "Win32_System_SystemServices", "Win32_Storage_Xps"] }
+windows-sys = { version = "0.59", features = ["Win32_Graphics_Printing", "Win32_Graphics_Gdi", "Win32_Graphics_GdiPlus", "Win32_Foundation", "Win32_System_SystemServices", "Win32_Storage_Xps", "Win32_Networking_WinSock", "Win32_Devices_Bluetooth"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]

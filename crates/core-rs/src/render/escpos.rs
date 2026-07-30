@@ -1,13 +1,56 @@
 //! PrintDocument -> ESC/POS bytes. Mirrors `packages/core-ts/src/render/escpos.ts`
 //! byte-for-byte -- see that file's header for the escpos-php cross-check notes.
 
-use crate::render::imaging::{band_raster, base64_to_bytes, png_to_raster_default_gamma, THERMAL_58_DOTS, THERMAL_80_DOTS};
+use crate::render::imaging::{band_raster, base64_to_bytes, png_to_raster_default_gamma, RasterImage, THERMAL_58_DOTS, THERMAL_80_DOTS};
 use crate::render::layout::layout_row;
+use crate::render::text_shaping::{bitmap_to_raster, needs_shaping, shape_text_to_bitmap};
 use crate::types::{
     Align, BarcodeNode, BarcodeSymbology, CutNode, DrawerNode, FeedNode, ImageNode, Paper, PaperKind, PrintDocument,
     PrintNode, QrCodeNode, QrEcLevel, RawNode, RowNode, RuleNode, TextNode,
 };
 use crate::{types::resolve_chars_per_line, CoreError};
+
+/// Base line height (in thermal dots) a shaped-text bitmap targets at
+/// `TextSize { w: 1, h: 1 }`, before the per-font compensation below.
+const SHAPED_TEXT_BASE_HEIGHT_DOTS: f32 = 32.0;
+
+fn shaped_text_height_dots(size_h: u8) -> f32 {
+    SHAPED_TEXT_BASE_HEIGHT_DOTS * size_h.max(1) as f32 * crate::render::text_shaping::VISUAL_SIZE_COMPENSATION
+}
+
+fn max_dots_for_paper(paper: &Paper) -> u32 {
+    if paper.kind == PaperKind::Thermal58 {
+        THERMAL_58_DOTS
+    } else {
+        THERMAL_80_DOTS
+    }
+}
+
+/// Emits a shaped-text bitmap via the same `GS v 0` raster path `write_image`
+/// uses. Returns `false` if shaping produced nothing (e.g. whitespace-only),
+/// so the caller can fall back to the plain-text path.
+fn write_shaped_text(w: &mut ByteWriter, text: &str, size_h: u8, align: Align, bold: bool, max_dots: u32) -> bool {
+    let Some(bitmap) = shape_text_to_bitmap(text, shaped_text_height_dots(size_h), bold) else {
+        return false;
+    };
+    let raster: RasterImage = bitmap_to_raster(&bitmap, max_dots);
+    w.push(&[ESC, 0x61, align_code(align)]);
+    for (rows, bits) in band_raster(&raster, 48) {
+        w.push(&[
+            GS,
+            0x76,
+            0x30,
+            0x00,
+            (raster.bytes_per_row & 0xff) as u8,
+            ((raster.bytes_per_row >> 8) & 0xff) as u8,
+            (rows & 0xff) as u8,
+            ((rows >> 8) & 0xff) as u8,
+        ]);
+        w.push(bits);
+    }
+    w.push(&[ESC, 0x61, 0]);
+    true
+}
 
 const ESC: u8 = 0x1b;
 const GS: u8 = 0x1d;
@@ -43,7 +86,22 @@ fn text_to_bytes(value: &str) -> Vec<u8> {
         .collect()
 }
 
-fn write_text(w: &mut ByteWriter, node: &TextNode) {
+fn write_text(w: &mut ByteWriter, node: &TextNode, paper: &Paper) {
+    // Underline/invert/font-B aren't applied on this path -- the shaper
+    // draws whichever of the two bundled weights (regular/bold) matches
+    // `node.bold`, but has no notion of underline, invert, or a distinct
+    // "Font B" face. Acceptable for v1 (still correctly-shaped, legible,
+    // correctly-weighted Myanmar); revisit if those turn out to matter.
+    if needs_shaping(&node.value) {
+        let size_h = node.size.map(|s| s.h).unwrap_or(1);
+        let align = node.align.unwrap_or_default();
+        let bold = node.bold.unwrap_or(false);
+        if write_shaped_text(w, &node.value, size_h, align, bold, max_dots_for_paper(paper)) {
+            return;
+        }
+        // shape_text_to_bitmap returned nothing (e.g. whitespace-only) -- fall through.
+    }
+
     let size_w = clamp(node.size.map(|s| s.w as i64).unwrap_or(1) - 1, 0, 7);
     let size_h = clamp(node.size.map(|s| s.h as i64).unwrap_or(1) - 1, 0, 7);
     w.push(&[ESC, 0x61, align_code(node.align.unwrap_or_default())]);
@@ -58,11 +116,72 @@ fn write_text(w: &mut ByteWriter, node: &TextNode) {
     w.push(&[ESC, 0x61, 0, ESC, 0x45, 0, ESC, 0x2d, 0, GS, 0x42, 0, GS, 0x21, 0, ESC, 0x4d, 0]);
 }
 
-fn write_row(w: &mut ByteWriter, node: &RowNode, chars_per_line: usize) {
+fn write_row(w: &mut ByteWriter, node: &RowNode, chars_per_line: usize, paper: &Paper) {
+    if node.columns.iter().any(|c| needs_shaping(&c.text)) {
+        write_row_shaped(w, node, paper);
+        return;
+    }
     w.push(&[ESC, 0x45, node.bold.unwrap_or(false) as u8]);
     w.push(&text_to_bytes(&layout_row(&node.columns, chars_per_line)));
     w.push(&[0x0a]);
     w.push(&[ESC, 0x45, 0]);
+}
+
+/// Row layout for the case where at least one column needs shaped-text
+/// rendering. Once any column needs it, *all* columns in the row render as
+/// bitmaps (even plain-ASCII ones) so proportional column positions stay in
+/// real pixels throughout -- mixing a pixel-positioned bitmap column with a
+/// monospace-character-grid column in the same row wouldn't line up.
+fn write_row_shaped(w: &mut ByteWriter, node: &RowNode, paper: &Paper) {
+    let max_dots = max_dots_for_paper(paper);
+    let row_height = shaped_text_height_dots(1).ceil() as u32;
+    let total_units: f64 = node.columns.iter().map(|c| c.width).sum();
+    if total_units <= 0.0 {
+        return;
+    }
+    let bold = node.bold.unwrap_or(false);
+
+    let mut canvas = vec![0u8; (max_dots * row_height) as usize];
+    let mut x_cursor = 0u32;
+    for col in &node.columns {
+        let col_width_dots = ((col.width / total_units) * max_dots as f64).round() as u32;
+        if let Some(bitmap) = shape_text_to_bitmap(&col.text, row_height as f32, bold) {
+            let bw = bitmap.width.min(col_width_dots.max(1));
+            let x_offset = match col.align.unwrap_or_default() {
+                Align::Right => col_width_dots.saturating_sub(bw),
+                Align::Center => col_width_dots.saturating_sub(bw) / 2,
+                Align::Left => 0,
+            };
+            let y_offset = row_height.saturating_sub(bitmap.height) / 2; // vertically center within the shared row height
+            for y in 0..bitmap.height.min(row_height) {
+                for x in 0..bw {
+                    let src = bitmap.coverage[(y * bitmap.width + x) as usize];
+                    let dst_x = x_cursor + x_offset + x;
+                    let dst_y = y_offset + y;
+                    if dst_x < max_dots && dst_y < row_height {
+                        let idx = (dst_y * max_dots + dst_x) as usize;
+                        canvas[idx] = canvas[idx].max(src);
+                    }
+                }
+            }
+        }
+        x_cursor += col_width_dots;
+    }
+
+    let raster = crate::render::text_shaping::coverage_to_raster(max_dots, row_height, &canvas, max_dots);
+    for (rows, bits) in band_raster(&raster, 48) {
+        w.push(&[
+            GS,
+            0x76,
+            0x30,
+            0x00,
+            (raster.bytes_per_row & 0xff) as u8,
+            ((raster.bytes_per_row >> 8) & 0xff) as u8,
+            (rows & 0xff) as u8,
+            ((rows >> 8) & 0xff) as u8,
+        ]);
+        w.push(bits);
+    }
 }
 
 fn write_rule(w: &mut ByteWriter, node: &RuleNode, chars_per_line: usize) {
@@ -167,8 +286,8 @@ pub fn to_escpos(doc: &PrintDocument) -> Result<Vec<u8>, CoreError> {
     w.push(&[ESC, 0x40]); // initialize
     for node in &doc.content {
         match node {
-            PrintNode::Text(n) => write_text(&mut w, n),
-            PrintNode::Row(n) => write_row(&mut w, n, chars_per_line),
+            PrintNode::Text(n) => write_text(&mut w, n, &doc.paper),
+            PrintNode::Row(n) => write_row(&mut w, n, chars_per_line, &doc.paper),
             PrintNode::Rule(n) => write_rule(&mut w, n, chars_per_line),
             PrintNode::Feed(n) => write_feed(&mut w, n),
             PrintNode::Image(n) => write_image(&mut w, n, &doc.paper)?,

@@ -99,13 +99,85 @@ pub async fn print_document_gdi(_printer_name: &str, _doc: &printers_core::Print
     Err(AgentError::NotImplemented("the Windows GDI print transport only runs on Windows".to_string()))
 }
 
+/// Builds a DEVMODEW (as a raw byte buffer, since its trailing driver-private
+/// extra data makes it variably sized) requesting the paper size that matches
+/// `doc.paper.kind`, by fetching the printer's default DEVMODE via
+/// `DocumentPropertiesW` and overwriting just the paper fields. Without this,
+/// `CreateDCW`'s `lpInitData` would be null and every job would silently
+/// print on the driver's default paper size (typically Letter) regardless of
+/// what the document declared -- an A4 document would come out on Letter
+/// paper with no error. Returns `None` (falls back to the driver default) if
+/// any step fails, rather than aborting the print job over a paper-size
+/// preference.
+#[cfg(target_os = "windows")]
+fn devmode_for_paper(printer_name: &[u16], paper: &printers_core::types::Paper, width_mm: f64, height_mm: f64) -> Option<Vec<u8>> {
+    use printers_core::types::PaperKind;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Graphics::Gdi::{DEVMODEW, DMPAPER_A3, DMPAPER_A4, DMPAPER_LETTER, DM_IN_BUFFER, DM_OUT_BUFFER, DM_PAPERLENGTH, DM_PAPERSIZE, DM_PAPERWIDTH};
+    use windows_sys::Win32::Graphics::Printing::{ClosePrinter, DocumentPropertiesW, OpenPrinterW};
+
+    unsafe {
+        let mut hprinter: HANDLE = null_mut();
+        if OpenPrinterW(printer_name.as_ptr() as *mut _, &mut hprinter, null_mut()) == 0 {
+            return None;
+        }
+
+        let size = DocumentPropertiesW(null_mut(), hprinter, printer_name.as_ptr(), null_mut(), null_mut(), 0);
+        if size <= 0 {
+            ClosePrinter(hprinter);
+            return None;
+        }
+
+        let mut buf = vec![0u8; size as usize];
+        let devmode_ptr = buf.as_mut_ptr() as *mut DEVMODEW;
+        let got = DocumentPropertiesW(null_mut(), hprinter, printer_name.as_ptr(), devmode_ptr, null_mut(), DM_OUT_BUFFER);
+        if got < 0 {
+            ClosePrinter(hprinter);
+            return None;
+        }
+
+        let dm = &mut *devmode_ptr;
+        match paper.kind {
+            PaperKind::A4 => {
+                dm.dmFields |= DM_PAPERSIZE;
+                dm.Anonymous1.Anonymous1.dmPaperSize = DMPAPER_A4 as i16;
+            }
+            PaperKind::A3 => {
+                dm.dmFields |= DM_PAPERSIZE;
+                dm.Anonymous1.Anonymous1.dmPaperSize = DMPAPER_A3 as i16;
+            }
+            PaperKind::Letter => {
+                dm.dmFields |= DM_PAPERSIZE;
+                dm.Anonymous1.Anonymous1.dmPaperSize = DMPAPER_LETTER as i16;
+            }
+            PaperKind::Custom | PaperKind::Thermal58 | PaperKind::Thermal80 => {
+                dm.dmFields |= DM_PAPERWIDTH | DM_PAPERLENGTH;
+                dm.Anonymous1.Anonymous1.dmPaperWidth = (width_mm * 10.0).round() as i16;
+                dm.Anonymous1.Anonymous1.dmPaperLength = (height_mm * 10.0).round() as i16;
+            }
+        }
+
+        // Let the driver validate/merge our requested fields back into the buffer.
+        DocumentPropertiesW(null_mut(), hprinter, printer_name.as_ptr(), devmode_ptr, devmode_ptr, DM_IN_BUFFER | DM_OUT_BUFFER);
+        ClosePrinter(hprinter);
+        Some(buf)
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn print_document_gdi_blocking(printer_name: &str, doc: &printers_core::PrintDocument, copies: u32) -> Result<(), AgentError> {
     use printers_core::render::barcode::generate_barcode_bits;
     use printers_core::render::qr::qr_modules;
+    use printers_core::render::text_shaping::needs_shaping;
     use printers_core::types::{resolve_margin_mm, resolve_page_height_mm, resolve_page_width_mm, Align, PrintNode, QrEcLevel};
     use std::ptr::null_mut;
     use windows_sys::Win32::Graphics::Gdi::*;
+    use windows_sys::Win32::Graphics::GdiPlus::{
+        GdipCreateFont, GdipCreateFontFamilyFromName, GdipCreateFromHDC, GdipCreateSolidFill, GdipDeleteBrush, GdipDeleteFont, GdipDeleteFontFamily,
+        GdipDeleteGraphics, GdipDrawString, GdipMeasureString, GdiplusShutdown, GdiplusStartup, FontStyleBold, FontStyleRegular, GpFont, GpFontFamily,
+        GpGraphics, GpSolidFill, RectF, UnitPixel,
+    };
     use windows_sys::Win32::Storage::Xps::{EndDoc, EndPage, StartDocW, StartPage, DOCINFOW};
 
     const FONT_SIZE_PT: f64 = 11.0;
@@ -126,13 +198,46 @@ fn print_document_gdi_blocking(printer_name: &str, doc: &printers_core::PrintDoc
         let margin_mm = resolve_margin_mm(&doc.paper);
 
         let wide_printer_name = to_wide(printer_name);
-        let hdc = CreateDCW(null_mut(), wide_printer_name.as_ptr(), null_mut(), null_mut());
+        let devmode_buf = devmode_for_paper(&wide_printer_name, &doc.paper, width_mm, height_mm);
+        let devmode_ptr = devmode_buf.as_ref().map(|b| b.as_ptr() as *const DEVMODEW).unwrap_or(null_mut());
+        let hdc = CreateDCW(null_mut(), wide_printer_name.as_ptr(), null_mut(), devmode_ptr);
         if hdc.is_null() {
             return Err(AgentError::TransportError(format!("CreateDC failed for printer '{printer_name}'")));
         }
 
+        // GDI+ (via GdipDrawString), not raw GDI's TextOutW, is what actually
+        // applies Myanmar's complex-script shaping (vowel-sign/medial
+        // reordering) when drawing text -- TextOutW draws one glyph per
+        // codepoint in string order regardless of font, which is wrong for
+        // Myanmar. Started once per print job, paired with GdiplusShutdown
+        // in the cleanup below; only used for text needing it (see
+        // draw_myanmar_text), plain ASCII keeps using the existing GDI path.
+        let mut gdiplus_token: usize = 0;
+        let startup_input = windows_sys::Win32::Graphics::GdiPlus::GdiplusStartupInput { GdiplusVersion: 1, DebugEventCallback: 0, SuppressBackgroundThread: 0, SuppressExternalCodecs: 0 };
+        let mut startup_output = std::mem::zeroed();
+        GdiplusStartup(&mut gdiplus_token, &startup_input, &mut startup_output);
+        let mut gdiplus_graphics: *mut GpGraphics = null_mut();
+        GdipCreateFromHDC(hdc, &mut gdiplus_graphics);
+
         let dpi_x = GetDeviceCaps(hdc, LOGPIXELSX as i32) as f64;
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY as i32) as f64;
+
+        // GDI+ output submitted to a printer HDC (GdipDrawString etc.) gets
+        // converted to vector paths by the driver using a fixed 96 DPI
+        // assumption, REGARDLESS of the device's real resolution -- verified
+        // against a real "Microsoft Print to PDF" DC reporting 600 DPI via
+        // GetDeviceCaps (and via `GdipGetDpiY`, which also -- misleadingly
+        // -- reports 600): the actual PDF page's coordinate transform
+        // matrix corresponded to exactly 96 DPI, so GDI+-space pixels sized
+        // using the device's true DPI rendered ~6x too large. Plain GDI
+        // (CreateFontW/TextOutW) doesn't have this problem -- the driver
+        // converts that to real PDF text operators with a correctly
+        // device-DPI-aware font size. This is a known category of GDI+/printer
+        // DPI mismatch, not specific to this one driver, so this fixed 96
+        // baseline (rather than trusting either GetDeviceCaps or
+        // GdipGetDpiY) is the correct fix, not a workaround for one test.
+        const GDIPLUS_ASSUMED_DPI: f64 = 96.0;
+        let gdi_to_gdiplus_px = (GDIPLUS_ASSUMED_DPI / dpi_y) as f32;
         let mm_to_px_x = |mm: f64| (mm / 25.4 * dpi_x).round() as i32;
         let mm_to_px_y = |mm: f64| (mm / 25.4 * dpi_y).round() as i32;
         let pt_to_px_y = |pt: f64| (pt / 72.0 * dpi_y).round() as i32;
@@ -183,6 +288,60 @@ fn print_document_gdi_blocking(printer_name: &str, doc: &printers_core::PrintDoc
             PatBlt(hdc, x, y, w.max(1), h.max(1), BLACKNESS);
         };
 
+        // Draws `text` via GDI+ (see the GdiplusStartup comment above for
+        // why) using a font known to cover Myanmar ("Myanmar Text", built
+        // into Windows 10/11), aligning it within (container_x,
+        // container_width) like the plain-GDI text path does. A no-op if
+        // GDI+ failed to initialize or the font/draw calls fail, rather than
+        // aborting the whole print job over one unsupported line.
+        let draw_myanmar_text = |text: &str, align: Option<Align>, container_x: f32, container_width: f32, y: f32, height_px: f32, bold: bool| {
+            if gdiplus_graphics.is_null() {
+                return;
+            }
+            // Convert every GDI-space coordinate/size to GDI+-space once, up
+            // front, via the DPI-mismatch factor computed above -- from here
+            // down, everything (measuring, aligning, drawing) stays entirely
+            // in GDI+-space, so no further conversion is needed.
+            let container_x = container_x * gdi_to_gdiplus_px;
+            let container_width = container_width * gdi_to_gdiplus_px;
+            let y = y * gdi_to_gdiplus_px;
+            let height_px = height_px * gdi_to_gdiplus_px;
+
+            let family_name = to_wide("Myanmar Text");
+            let mut family: *mut GpFontFamily = null_mut();
+            if GdipCreateFontFamilyFromName(family_name.as_ptr(), null_mut(), &mut family) != 0 {
+                return;
+            }
+            let mut font: *mut GpFont = null_mut();
+            let style = if bold { FontStyleBold } else { FontStyleRegular };
+            if GdipCreateFont(family, height_px, style, UnitPixel, &mut font) != 0 {
+                GdipDeleteFontFamily(family);
+                return;
+            }
+            let mut brush: *mut GpSolidFill = null_mut();
+            GdipCreateSolidFill(0xff000000, &mut brush); // opaque black, ARGB
+
+            let wide_text = to_wide(text);
+            let measure_rect = RectF { X: 0.0, Y: 0.0, Width: 10000.0, Height: height_px * 2.0 };
+            let mut bounds: RectF = std::mem::zeroed();
+            let mut chars_fitted = 0i32;
+            let mut lines_filled = 0i32;
+            GdipMeasureString(gdiplus_graphics, wide_text.as_ptr(), -1, font, &measure_rect, std::ptr::null(), &mut bounds, &mut chars_fitted, &mut lines_filled);
+
+            let x = container_x
+                + match align.unwrap_or_default() {
+                    Align::Center => (container_width - bounds.Width) / 2.0,
+                    Align::Right => container_width - bounds.Width,
+                    Align::Left => 0.0,
+                };
+            let draw_rect = RectF { X: x, Y: y, Width: bounds.Width.max(1.0), Height: height_px * 2.0 };
+            GdipDrawString(gdiplus_graphics, wide_text.as_ptr(), -1, font, &draw_rect, std::ptr::null(), brush as *const _);
+
+            GdipDeleteBrush(brush as *mut _);
+            GdipDeleteFont(font);
+            GdipDeleteFontFamily(family);
+        };
+
         let result: Result<(), AgentError> = (|| {
             let doc_name = to_wide(doc.meta.as_ref().and_then(|m| m.title.clone()).unwrap_or_else(|| "Print".to_string()).as_str());
             let doc_info = DOCINFOW { cbSize: std::mem::size_of::<DOCINFOW>() as i32, lpszDocName: doc_name.as_ptr(), lpszOutput: null_mut(), lpszDatatype: null_mut(), fwType: 0 };
@@ -202,28 +361,37 @@ fn print_document_gdi_blocking(printer_name: &str, doc: &printers_core::PrintDoc
                     match node {
                         PrintNode::Text(n) => {
                             let size_px = pt_to_px_y(FONT_SIZE_PT * n.size.map(|s| s.h as f64).unwrap_or(1.0));
-                            let font = create_font(size_px, n.bold.unwrap_or(false));
-                            let old_font = SelectObject(hdc, font as HGDIOBJ);
-                            let wide_text = to_wide(&n.value);
-                            let text_width = measure_width(&wide_text);
-                            let x = margin_x + align_x(n.align, content_width, text_width);
-                            TextOutW(hdc, x, cursor_y, wide_text.as_ptr(), (wide_text.len() - 1) as i32);
-                            SelectObject(hdc, old_font);
-                            DeleteObject(font as HGDIOBJ);
+                            if needs_shaping(&n.value) {
+                                draw_myanmar_text(&n.value, n.align, margin_x as f32, content_width as f32, cursor_y as f32, size_px as f32, n.bold.unwrap_or(false));
+                            } else {
+                                let font = create_font(size_px, n.bold.unwrap_or(false));
+                                let old_font = SelectObject(hdc, font as HGDIOBJ);
+                                let wide_text = to_wide(&n.value);
+                                let text_width = measure_width(&wide_text);
+                                let x = margin_x + align_x(n.align, content_width, text_width);
+                                TextOutW(hdc, x, cursor_y, wide_text.as_ptr(), (wide_text.len() - 1) as i32);
+                                SelectObject(hdc, old_font);
+                                DeleteObject(font as HGDIOBJ);
+                            }
                             cursor_y += (size_px as f64 * LINE_HEIGHT_FACTOR).round() as i32;
                         }
                         PrintNode::Row(n) => {
                             let size_px = pt_to_px_y(FONT_SIZE_PT);
-                            let font = create_font(size_px, n.bold.unwrap_or(false));
+                            let bold = n.bold.unwrap_or(false);
+                            let font = create_font(size_px, bold);
                             let old_font = SelectObject(hdc, font as HGDIOBJ);
                             let total_units: f64 = n.columns.iter().map(|c| c.width).sum();
                             let mut x_cursor = margin_x;
                             for col in &n.columns {
                                 let col_width = ((col.width / total_units) * content_width as f64).round() as i32;
-                                let wide_text = to_wide(&col.text);
-                                let text_width = measure_width(&wide_text);
-                                let x = x_cursor + align_x(col.align, col_width, text_width);
-                                TextOutW(hdc, x, cursor_y, wide_text.as_ptr(), (wide_text.len() - 1) as i32);
+                                if needs_shaping(&col.text) {
+                                    draw_myanmar_text(&col.text, col.align, x_cursor as f32, col_width as f32, cursor_y as f32, size_px as f32, bold);
+                                } else {
+                                    let wide_text = to_wide(&col.text);
+                                    let text_width = measure_width(&wide_text);
+                                    let x = x_cursor + align_x(col.align, col_width, text_width);
+                                    TextOutW(hdc, x, cursor_y, wide_text.as_ptr(), (wide_text.len() - 1) as i32);
+                                }
                                 x_cursor += col_width;
                             }
                             SelectObject(hdc, old_font);
@@ -312,6 +480,10 @@ fn print_document_gdi_blocking(printer_name: &str, doc: &printers_core::PrintDoc
             Ok(())
         })();
 
+        if !gdiplus_graphics.is_null() {
+            GdipDeleteGraphics(gdiplus_graphics);
+        }
+        GdiplusShutdown(gdiplus_token);
         DeleteDC(hdc);
         result
     }
