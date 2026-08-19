@@ -111,11 +111,15 @@ messages if something fails.
 ### 1b. The desktop agent (for WiFi printers, Windows-installed USB printers, or classic Bluetooth)
 
 The "agent" is a small background program that actually talks to the
-printer. On Windows, a ready-to-run copy is already built for you:
+printer. `dist/` is gitignored and not shipped in the repo, so you need to
+build it yourself first (see "To rebuild the agent yourself later" below for
+the exact command) — the result lands at `target\release\printers-agent.exe`;
+copy or symlink it to `dist\printers-agent.exe` if you want the paths below
+to match exactly, or just substitute the `target\release\` path throughout.
 
-**`dist/printers-agent.exe`** — just double-click it. A console window will
-open and stay open (that's normal — it's running the server). Leave it
-running while you test.
+**`dist/printers-agent.exe`** — once built, just double-click it. A console
+window will open and stay open (that's normal — it's running the server).
+Leave it running while you test.
 
 **Important first-time setup:** because the hardware test page is opened as
 a local file, you need to tell the agent to allow that. Before double
@@ -170,10 +174,12 @@ help debugging something.
 
 ### 1d. Android app (`dist/printers-flutter-test.apk`)
 
-A ready-to-install debug APK is already built for you — no Android Studio
-or Flutter install needed just to try it.
+`dist/` is gitignored and not shipped, so build the debug APK yourself first
+(see "To rebuild this APK yourself later" below) — it needs Android Studio's
+SDK and Flutter installed, there's no way to skip that step.
 
-1. Copy `dist/printers-flutter-test.apk` to your Android phone (USB cable,
+1. Copy the built APK (`packages/sdk_flutter/example/build/app/outputs/flutter-apk/app-debug.apk`)
+   to your Android phone (USB cable,
    or upload it somewhere and download it on the phone).
 2. Open the file on the phone. Android will warn about installing from an
    unknown source the first time — allow it (this is normal for a debug

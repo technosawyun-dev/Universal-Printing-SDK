@@ -14,9 +14,10 @@ drifting per-project code.
 
 ## Tech Stack
 
-- **Rust** — `core-rs` (document model + renderers, incl. PDF), `core-ffi`
-  (uniffi bindings for native mobile), `print-agent` (HTTP+WS local server
-  binary), `sdk-tauri` (Tauri v2 plugin)
+- **Rust** — `core-rs` (document model + renderers, incl. PDF, plus complex-
+  script text shaping via `rustybuzz`/`ab_glyph` with bundled Noto Sans
+  Myanmar fonts), `core-ffi` (uniffi bindings for native mobile),
+  `print-agent` (HTTP+WS local server binary), `sdk-tauri` (Tauri v2 plugin)
 - **TypeScript** — `core-ts` (document model + renderers, twin of `core-rs`),
   `sdk-web` (browser client), `sdk-electron` (Electron bridge)
 - **Dart/Flutter** — `sdk_flutter` (Android/iOS plugin, binds to `core-rs` via
@@ -65,7 +66,8 @@ docs/
   ARCHITECTURE.md   System design and rationale
   DOCUMENT_FORMAT.md  The universal PrintDocument JSON schema
   PROTOCOL.md         Print-agent HTTP/WS API
-dist/              Prebuilt artifacts for hand-testing (printers-agent.exe, .apk)
+dist/              Gitignored, user-populated: local build output copied here
+                    for hand-testing (printers-agent.exe, .apk) — not shipped
 TESTING.md         Real-hardware testing log and step-by-step test guide
 ```
 
@@ -97,7 +99,10 @@ Verified against real hardware (see Testing Status below for exact scope):
 Implemented but **not yet hardware-verified**: Web Bluetooth/BLE direct
 browser printing (works in principle, but no BLE printer was available to
 test), Android app transports beyond what's noted below, macOS (any
-transport), and iOS (no build exists yet).
+transport), iOS (no build exists yet), and Myanmar/complex-script text
+shaping in the ESC/POS and PDF renderers (visually previewed to PNG/PDF via
+`core-rs`'s example binaries, but not yet printed to a real thermal printer
+or confirmed against `TESTING.md`'s hardware log).
 
 ## Getting Started / Local Dev
 
@@ -119,10 +124,11 @@ cd packages/sdk_flutter && flutter test
 
 To try printing without writing any code, open
 `apps/hardware-test/index.html` directly in Chrome/Edge (no server needed),
-or run the prebuilt agent (`dist/printers-agent.exe` on Windows, or
-`cargo run -p printers-print-agent --bin printers-agent` elsewhere) alongside
-it. Full step-by-step instructions, including known per-platform gotchas, are
-in `TESTING.md`.
+alongside the agent — either `cargo run -p printers-print-agent --bin
+printers-agent`, or a release build copied into `dist/` (gitignored, not
+shipped in the repo — build it yourself with `cargo build --release -p
+printers-print-agent`). Full step-by-step instructions, including known
+per-platform gotchas, are in `TESTING.md`.
 
 ## Testing Status
 
